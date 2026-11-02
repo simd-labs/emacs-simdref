@@ -1,0 +1,16 @@
+FROM docker.io/library/debian:trixie
+
+# emacs-nox gives Emacs 30 in trixie.  curl fetches the pinned uv
+# release, tar and gzip unpack it, ca-certificates cover TLS.  git
+# keeps the vc probe in find-file-hook quiet, like on a user machine.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      emacs-nox ca-certificates curl gzip git tar \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fresh HOME, owned by the host user that --userns=keep-id maps in.
+ENV HOME=/tmp/home
+RUN mkdir -p /tmp/home && chmod 0777 /tmp/home
+
+WORKDIR /src
+ENTRYPOINT ["bash", "test/podman/run.sh"]
