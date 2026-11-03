@@ -457,13 +457,17 @@ beside simdref.el, and it exists."
         (should (file-exists-p (nth 1 contact)))))))
 
 (ert-deftest simdref-test-contact-preset-missing-fallback ()
-  "A missing preset file keeps the contact without the preset argument."
+  "A missing preset file runs the companion first under rass.
+rass with no preset routes hover to its first server, so the companion
+runs first: every clangd feature keeps working and simdref hover is
+lost.  The package logs the fallback once."
   (simdref-test--with-sandbox
     (simdref-test--setup-daily)
     (simdref-test--claim-today)
     (let ((pdir (expand-file-name "pathbin" simdref-test--tmp-root))
           (simdref--preset-file (expand-file-name "no-such-preset.py"
-                                                  simdref-test--tmp-root)))
+                                                  simdref-test--tmp-root))
+          (simdref--preset-log-shown nil))
       (simdref-test--put (simdref-test--fake "clangd.sh")
                          (expand-file-name "clangd" pdir))
       (let ((exec-path (list pdir)))
@@ -471,10 +475,13 @@ beside simdref.el, and it exists."
                          (c++-mode)
                          (simdref--eglot-contact))
                        (list (expand-file-name "bin/rass" simdref-test--tmp-root)
+                             "--" "clangd"
                              "--"
                              (expand-file-name "bin/simdref-lsp"
-                                               simdref-test--tmp-root)
-                             "--" "clangd")))))))
+                                               simdref-test--tmp-root))))
+        (with-temp-buffer (c++-mode) (simdref--eglot-contact))
+        (should (= 1 (simdref-test--count "preset .* missing"
+                                          (simdref-test--reflog))))))))
 
 (ert-deftest simdref-test-contact-cxx-no-clangd ()
   "A C++ buffer with no clangd on exec-path runs simdref alone."
@@ -577,6 +584,27 @@ beside simdref.el, and it exists."
                  (string-match "uv tool upgrade rassumfrassum" log)))
       (should (< (string-match "uv tool upgrade rassumfrassum" log)
                  (string-match "isa vaddps --short" log))))))
+
+(ert-deftest simdref-test-daily-install-rass-missing ()
+  "A daily check with no private rass runs the pinned rass install.
+The step is the same pinned install the first install uses, and it
+runs after the simdref upgrade."
+  (simdref-test--with-sandbox
+    (simdref-test--setup-daily)
+    (delete-file (expand-file-name "bin/rass" simdref-test--tmp-root))
+    (simdref-maintain)
+    (should (simdref-test--wait
+             (lambda ()
+               (string-match-p "isa vaddps --short" (simdref-test--log-contents)))))
+    (let ((log (simdref-test--log-contents)))
+      (should (string-match-p (regexp-quote
+                               "uv tool install --force rassumfrassum>=0.3.5,<0.4")
+                              log))
+      (should (not (string-match-p "uv tool upgrade rassumfrassum" log)))
+      (should (< (string-match "uv tool upgrade simdref" log)
+                 (string-match "uv tool install --force rassumfrassum" log))))
+    (should (file-executable-p (expand-file-name "bin/rass"
+                                                 simdref-test--tmp-root)))))
 
 (provide 'simdref-test)
 ;;; simdref-test.el ends here
