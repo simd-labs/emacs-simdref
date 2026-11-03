@@ -47,7 +47,7 @@ Set `simdref-install-dir` to move the private install.
 
 ## C, C++ and CUDA buffers
 
-In a C, C++ or CUDA buffer, clangd and simdref run together. The
+In a C, C++ or CUDA buffer, simdref and clangd run together. The
 rassumfrassum multiplexer (`rass`) runs the two servers for one eglot
 connection. lsp-mode runs simdref as an add-on client with clangd and
 no multiplexer.
@@ -56,6 +56,10 @@ The companion server is the `simdref-companion-server` command list.
 The default is `("clangd")`. Set it to nil to run simdref alone. The
 first element of the list must be on `exec-path`. Assembly buffers run
 simdref alone.
+
+Hover on an asm string shows the simdref instruction text. Hover on a
+C++ name shows nothing: the rassumfrassum multiplexer sends hover to
+its first server only.
 
 A new simdref or rass version takes effect at the next server start.
 

@@ -431,7 +431,8 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
              eglot-server-programs))))
 
 (ert-deftest simdref-test-contact-cxx-rass-with-clangd ()
-  "A C++ buffer with clangd runs rass -- clangd -- simdref-lsp."
+  "A C++ buffer with clangd runs rass -- simdref-lsp -- clangd.
+simdref runs first because rass sends hover to its first server only."
   (simdref-test--with-sandbox
     (simdref-test--setup-daily)
     (simdref-test--claim-today)
@@ -443,9 +444,10 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
                          (c++-mode)
                          (simdref--eglot-contact))
                        (list (expand-file-name "bin/rass" simdref-test--tmp-root)
-                             "--" "clangd" "--"
+                             "--"
                              (expand-file-name "bin/simdref-lsp"
-                                               simdref-test--tmp-root))))))))
+                                               simdref-test--tmp-root)
+                             "--" "clangd")))))))
 
 (ert-deftest simdref-test-contact-cxx-no-clangd ()
   "A C++ buffer with no clangd on exec-path runs simdref alone."

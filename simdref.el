@@ -395,8 +395,9 @@ This function never waits for the install."
       (simdref--log "rass not found, running simdref alone"))
     (or (and cmd
              (if (and rass (executable-find (car simdref-companion-server)))
-                 (append (list rass "--") simdref-companion-server
-                         (list "--" cmd))
+                 ;; rass sends hover to its first server only, so simdref runs first.
+                 (append (list rass "--") (list cmd "--")
+                         simdref-companion-server)
                (list cmd)))
         (user-error "Installing simdref in the background.  Run M-x eglot again when the log says the install is done"))))
 
