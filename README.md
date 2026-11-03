@@ -5,10 +5,14 @@ Show the brief of an assembly instruction from the local simdref catalog.
 `M-x eglot` on a buffer shows hover docs and inlay hints for instructions.
 The catalog is local, so the server answers without network.
 
+![Emacs showing simdref inlay hints in an asm buffer](https://raw.githubusercontent.com/simd-labs/emacs-simdref/844b53b3ab332cbffa210c6a573f1471e838e13c/emacs-asm.png)
+![Emacs showing a simdref inlay hint in a C++ buffer](https://raw.githubusercontent.com/simd-labs/emacs-simdref/844b53b3ab332cbffa210c6a573f1471e838e13c/emacs-cpp.png)
+
 ## Requirements
 
 - Emacs 29.1 or newer
 - `curl` and `tar` for the first install
+- Install the `markdown-mode` package so eglot shows the hover text as formatted markdown. Without the package the hover shows raw markdown.
 
 ## Setup
 
