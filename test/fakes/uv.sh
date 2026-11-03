@@ -13,7 +13,7 @@ case "$*" in
     cp "$SIMDREF_TEST_FAKE_LSP" "$UV_TOOL_BIN_DIR/simdref-lsp"
     chmod +x "$UV_TOOL_BIN_DIR/isa" "$UV_TOOL_BIN_DIR/simdref-lsp"
     ;;
-  "tool install rassumfrassum"|"tool install --force rassumfrassum")
+  "tool install rassumfrassum"*|"tool install --force rassumfrassum"*)
     mkdir -p "$UV_TOOL_BIN_DIR"
     cp "$SIMDREF_TEST_FAKE_RASS" "$UV_TOOL_BIN_DIR/rass"
     chmod +x "$UV_TOOL_BIN_DIR/rass"

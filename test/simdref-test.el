@@ -431,12 +431,39 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
              eglot-server-programs))))
 
 (ert-deftest simdref-test-contact-cxx-rass-with-clangd ()
-  "A C++ buffer with clangd runs rass -- simdref-lsp -- clangd.
-simdref runs first because rass sends hover to its first server only."
+  "A C++ buffer with clangd runs rass with the simdref-rass.py preset.
+The contact is rass PRESET -- simdref-lsp -- clangd: rass takes the
+preset path as its first positional argument, and the preset makes
+hover reach both servers.  The preset path is the file that ships
+beside simdref.el, and it exists."
   (simdref-test--with-sandbox
     (simdref-test--setup-daily)
     (simdref-test--claim-today)
     (let ((pdir (expand-file-name "pathbin" simdref-test--tmp-root)))
+      (simdref-test--put (simdref-test--fake "clangd.sh")
+                         (expand-file-name "clangd" pdir))
+      (let* ((exec-path (list pdir))
+             (contact (with-temp-buffer
+                        (c++-mode)
+                        (simdref--eglot-contact))))
+        (should (equal contact
+                       (list (expand-file-name "bin/rass" simdref-test--tmp-root)
+                             (expand-file-name "simdref-rass.py"
+                                               simdref-test--root)
+                             "--"
+                             (expand-file-name "bin/simdref-lsp"
+                                               simdref-test--tmp-root)
+                             "--" "clangd")))
+        (should (file-exists-p (nth 1 contact)))))))
+
+(ert-deftest simdref-test-contact-preset-missing-fallback ()
+  "A missing preset file keeps the contact without the preset argument."
+  (simdref-test--with-sandbox
+    (simdref-test--setup-daily)
+    (simdref-test--claim-today)
+    (let ((pdir (expand-file-name "pathbin" simdref-test--tmp-root))
+          (simdref--preset-file (expand-file-name "no-such-preset.py"
+                                                  simdref-test--tmp-root)))
       (simdref-test--put (simdref-test--fake "clangd.sh")
                          (expand-file-name "clangd" pdir))
       (let ((exec-path (list pdir)))
@@ -509,7 +536,9 @@ simdref runs first because rass sends hover to its first server only."
       (should (simdref-test--wait (lambda () (file-exists-p stamp)) 120))
       (setenv "SIMDREF_TEST_UV_RASS_SLEEP" "0"))
     (let ((log (simdref-test--log-contents)))
-      (should (string-match-p "uv tool install --force rassumfrassum" log))
+      (should (string-match-p (regexp-quote
+                               "uv tool install --force rassumfrassum>=0.3.5,<0.4")
+                              log))
       (should (< (string-match "uv tool install --force rassumfrassum" log)
                  (string-match "isa update" log))))
     (should (file-executable-p (expand-file-name "bin/rass"
@@ -541,7 +570,9 @@ simdref runs first because rass sends hover to its first server only."
              (lambda ()
                (string-match-p "isa vaddps --short" (simdref-test--log-contents)))))
     (let ((log (simdref-test--log-contents)))
-      (should (string-match-p "uv tool upgrade rassumfrassum" log))
+      (should (string-match-p (regexp-quote
+                               "uv tool upgrade rassumfrassum>=0.3.5,<0.4")
+                              log))
       (should (< (string-match "uv tool upgrade simdref" log)
                  (string-match "uv tool upgrade rassumfrassum" log)))
       (should (< (string-match "uv tool upgrade rassumfrassum" log)

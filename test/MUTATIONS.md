@@ -1,9 +1,9 @@
-1|# Mutation list for simdref.el
-2|
-3|Each mutation is one edit to `simdref.el`. A mutation counts as caught
-4|only when its named test fails. The runner copies `simdref.el` aside,
-5|applies the edit, runs the suite in the container, restores the file and
-6|proves the restore with `cmp`.
+# Mutation list for simdref.el and simdref-rass.py
+
+Each mutation is one edit to `simdref.el` or `simdref-rass.py`. A
+mutation counts as caught only when its named test fails. The runner
+copies the edited file aside, applies the edit, runs the suite in the
+container, restores the file and proves the restore with `cmp`.
 7|
 8|| id | mutation | edit | named test |
 9||----|----------|------|------------|
@@ -12,7 +12,7 @@
 12|| M3 | drop PATH-install guard | `(when (simdref--managed-p server dir)` becomes `(when t` | `simdref-test-path-install-untouched` |
 13|| M4 | delete today's marker in cleanup | `(unless (equal f marker)` becomes `(unless nil` | `simdref-test-todays-marker-kept` |
 14|| M5 | drop executable-exists check | `(if (not (file-executable-p program))` becomes `(if nil` | `simdref-test-missing-executable-quiet` |
-15|| M6 | drop catalog refresh after failed upgrade | the `isa vaddps --short` run head `(simdref--run (expand-file-name (simdref--exe "isa")` becomes `(ignore (expand-file-name (simdref--exe "isa")` | `simdref-test-refresh-after-failed-upgrade` |
+15|| M6 | drop catalog refresh after failed upgrade | the `isa vaddps --short` run form in `simdref--maybe-upgrade` becomes `nil` | `simdref-test-refresh-after-failed-upgrade` |
 16|| M7 | log nonzero exit at the success level | `(simdref--echo "%s" line)` becomes `(simdref--log "%s" line)` in `simdref--exit-log` | `simdref-test-nonzero-louder-than-success` |
 17|| M8 | stamp written before isa update | `(refresh ()` becomes `(refresh () (simdref--stamp dir)` | `simdref-test-failed-isa-update-no-stamp` |
 18|| M9 | predicate ignoring the stamp | `(file-exists-p (expand-file-name "installed" dir))` becomes `t` | `simdref-test-killed-uv-install-not-installed` |
@@ -21,7 +21,8 @@
 21|| M12 | stamp before rass install | `(install-rass ()` becomes `(install-rass () (simdref--stamp dir)` | `simdref-test-install-rass-step-stamp-last` |
 22|| M13 | contact ignoring the companion check | `(if (and rass (executable-find (car simdref-companion-server)))` becomes `(if rass` | `simdref-test-contact-cxx-no-clangd` |
 23|| M14 | asm-mode routed through rass | `(memq major-mode simdref--c-modes)` becomes `t` | `simdref-test-contact-asm-no-rass` |
-24|| M15 | simdref no longer first in the rass command | the append form `(append (list rass "--") (list cmd "--") simdref-companion-server)` becomes `(append (list rass "--") simdref-companion-server (list "--" cmd))` | `simdref-test-contact-cxx-rass-with-clangd` |
+24|| M15 | simdref no longer first in the rass command | the tail of the append in `simdref--eglot-contact` becomes `(list "--") simdref-companion-server (list "--" cmd)` | `simdref-test-contact-cxx-rass-with-clangd` |
+| M16 | hover routing back to primary only | the hover fan-out in `simdref-rass.py` becomes `s for s in servers[:1]` | `test_hover_routes_to_all_hover_servers` |
 25|
 26|The throttle mutation target is the time gate (M1). The named test
 27|fails when a same-day restart re-runs the network step.
@@ -108,5 +109,35 @@
 82|| M15 | `simdref-test-contact-cxx-rass-with-clangd` FAILED | failed-loud |
 83|
 84|All fifteen mutations are caught. Every restore is clean.
+
+## Results at the rass preset commit
+
+Each run: full suite in the container, named test must fail. The
+restore copies the edited file back from the pristine copy and `cmp`
+proves it byte-identical (`cmp exit=0`). All sixteen mutations run
+again at this commit, old ones included. M16 is new: it reverts the
+hover fan-out in `simdref-rass.py` to primary-only routing, and the
+Python preset test catches it.
+
+| id | named test result | verdict |
+|----|-------------------|---------|
+| M1 | `simdref-test-throttle-skips-same-day` FAILED | failed-loud |
+| M2 | `simdref-test-install-rejects-bad-sha` FAILED | failed-loud |
+| M3 | `simdref-test-path-install-untouched` FAILED | failed-loud |
+| M4 | `simdref-test-todays-marker-kept` FAILED | failed-loud |
+| M5 | `simdref-test-missing-executable-quiet` FAILED | failed-loud |
+| M6 | `simdref-test-refresh-after-failed-upgrade` FAILED | failed-loud |
+| M7 | `simdref-test-nonzero-louder-than-success` FAILED | failed-loud |
+| M8 | `simdref-test-failed-isa-update-no-stamp` FAILED | failed-loud |
+| M9 | `simdref-test-killed-uv-install-not-installed` FAILED | failed-loud |
+| M10 | `simdref-test-failed-install-quiet` FAILED | failed-loud |
+| M11 | `simdref-test-eglot-contact-never-waits` FAILED | failed-loud |
+| M12 | `simdref-test-install-rass-step-stamp-last` FAILED | failed-loud |
+| M13 | `simdref-test-contact-cxx-no-clangd` FAILED | failed-loud |
+| M14 | `simdref-test-contact-asm-no-rass` FAILED | failed-loud |
+| M15 | `simdref-test-contact-cxx-rass-with-clangd` FAILED | failed-loud |
+| M16 | `test_hover_routes_to_all_hover_servers` FAILED | failed-loud |
+
+All sixteen mutations are caught. Every restore is clean.
 85|
 86|

@@ -58,8 +58,7 @@ first element of the list must be on `exec-path`. Assembly buffers run
 simdref alone.
 
 Hover on an asm string shows the simdref instruction text. Hover on a
-C++ name shows nothing: the rassumfrassum multiplexer sends hover to
-its first server only.
+C++ name shows the clangd declaration: both servers answer hover.
 
 A new simdref or rass version takes effect at the next server start.
 

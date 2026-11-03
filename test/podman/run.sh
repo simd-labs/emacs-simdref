@@ -28,5 +28,9 @@ echo "checkdoc output lines: $(grep -c . /tmp/checkdoc.log)"
 cat /tmp/checkdoc.log
 echo "exit=$rc"
 
+echo "--- python preset test ---"
+/opt/rass/bin/python test/test_simdref_rass.py
+rc=$?; echo "exit=$rc"; [ $rc -ne 0 ] && fail=1
+
 echo "=== container tests done, fail=$fail ==="
 exit $fail

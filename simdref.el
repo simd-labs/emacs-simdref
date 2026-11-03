@@ -296,8 +296,9 @@ Then upgrade the private rass copy and refresh the catalog."
         (simdref--run uv '("tool" "upgrade" "simdref") env t
                       (lambda (_code _out)
                         ;; Never upgrade a rass that is not the private copy.
+                        ;; The spec keeps the upgrade inside the pinned range.
                         (if (file-executable-p rass)
-                            (simdref--run uv '("tool" "upgrade" "rassumfrassum")
+                            (simdref--run uv '("tool" "upgrade" "rassumfrassum>=0.3.5,<0.4")
                                           env t refresh)
                           (funcall refresh nil nil))))))))
 
@@ -349,7 +350,9 @@ The steps are pinned uv, simdref, rass and the catalog."
            (install-tool ()
              (step uv '("tool" "install" "--force" "simdref") #'install-rass))
            (install-rass ()
-             (step uv '("tool" "install" "--force" "rassumfrassum") #'refresh))
+             ;; The pin keeps rass on the class API the preset uses.
+             (step uv '("tool" "install" "--force" "rassumfrassum>=0.3.5,<0.4")
+                   #'refresh))
            (refresh ()
              (step isa '("update") #'done))
            (done ()
@@ -377,6 +380,13 @@ The steps are pinned uv, simdref, rass and the catalog."
 (defvar simdref--rass-log-shown nil
   "Non-nil once this session logged the missing-multiplexer fallback.")
 
+(defconst simdref--preset-file
+  (expand-file-name "simdref-rass.py"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Absolute path of the rass preset that ships beside simdref.el.
+The contact passes it to rass, so hover reaches simdref and the
+companion.  Captured at load time.")
+
 (defun simdref--eglot-contact (&rest _args)
   "Return the eglot contact for simdref, or signal `user-error'.
 A C, C++ or CUDA buffer with `simdref-companion-server' runs both
@@ -395,8 +405,14 @@ This function never waits for the install."
       (simdref--log "rass not found, running simdref alone"))
     (or (and cmd
              (if (and rass (executable-find (car simdref-companion-server)))
-                 ;; rass sends hover to its first server only, so simdref runs first.
-                 (append (list rass "--") (list cmd "--")
+                 ;; The preset sends hover to both servers, simdref and
+                 ;; the companion.  rass takes the preset path as its
+                 ;; first positional argument.  Without the file, keep
+                 ;; the plain command.
+                 (append (list rass)
+                         (and (file-readable-p simdref--preset-file)
+                              (list simdref--preset-file))
+                         (list "--" cmd "--")
                          simdref-companion-server)
                (list cmd)))
         (user-error "Installing simdref in the background.  Run M-x eglot again when the log says the install is done"))))
