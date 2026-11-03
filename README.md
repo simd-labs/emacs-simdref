@@ -29,7 +29,7 @@ lsp-mode is loaded, it registers the server there too.
 
 Without a server on `PATH`, the package installs one in the background to
 `(locate-user-emacs-file "simdref/")`. It downloads a pinned `uv`, installs
-`simdref` and the catalog. This takes minutes and never blocks Emacs.
+`simdref`, `rass` and the catalog. This takes minutes and never blocks Emacs.
 `M-x eglot` during the install starts nothing and shows this error:
 
 ```
@@ -44,6 +44,20 @@ new simdref version takes effect at the next server start. A server on
 `PATH` is never upgraded.
 
 Set `simdref-install-dir` to move the private install.
+
+## C, C++ and CUDA buffers
+
+In a C, C++ or CUDA buffer, clangd and simdref run together. The
+rassumfrassum multiplexer (`rass`) runs the two servers for one eglot
+connection. lsp-mode runs simdref as an add-on client with clangd and
+no multiplexer.
+
+The companion server is the `simdref-companion-server` command list.
+The default is `("clangd")`. Set it to nil to run simdref alone. The
+first element of the list must be on `exec-path`. Assembly buffers run
+simdref alone.
+
+A new simdref or rass version takes effect at the next server start.
 
 ## Logging
 
@@ -64,9 +78,10 @@ podman build -t emacs-simdref-test -f test/podman/Containerfile .
 podman run --rm --network none -v "$PWD:/src:ro,Z" emacs-simdref-test
 ```
 
-The suite drives `simdref-maintain` with fake `uv` and `isa` scripts.
-It needs no network: the install test fetches a staged uv release from
-a `file://` URL. Mutation results live in `test/MUTATIONS.md`.
+The suite drives `simdref-maintain` with fake `uv`, `isa`, `rass` and
+`simdref-lsp` scripts. It needs no network: the install test fetches a
+staged uv release from a `file://` URL. Mutation results live in
+`test/MUTATIONS.md`.
 
 ## License
 

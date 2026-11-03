@@ -24,7 +24,10 @@
 ;;; Commentary:
 
 ;; This package registers `simdref-lsp' with eglot, and with lsp-mode when
-;; lsp-mode is loaded.  With no server on `PATH', it installs one private
+;; lsp-mode is loaded.  In C, C++ and CUDA buffers it runs the companion
+;; server of `simdref-companion-server' (clangd by default) together with
+;; simdref through the rassumfrassum multiplexer, so both answer in one
+;; buffer.  With no server on `PATH', it installs one private
 ;; copy under `simdref-install-dir' in the background.  Once a day the
 ;; package upgrades that copy and refreshes the catalog.  A server on
 ;; `PATH' belongs to the user; the package never touches it.  A new
@@ -80,6 +83,18 @@ A stuck step must not hang forever.")
 (defconst simdref--modes
   '(asm-mode nasm-mode cuda-mode c-mode c++-mode c-ts-mode c++-ts-mode)
   "Major modes that get the simdref server.")
+
+(defconst simdref--c-modes
+  '(cuda-mode c-mode c++-mode c-ts-mode c++-ts-mode)
+  "Major modes that share the buffer with `simdref-companion-server'.")
+
+(defcustom simdref-companion-server '("clangd")
+  "Command list of the companion LSP server for C, C++ and CUDA buffers.
+The package multiplexes this server with simdref through
+rassumfrassum, so both answer in one buffer.  The first element must
+be on the variable `exec-path'.  Nil runs simdref alone."
+  :type '(repeat string)
+  :group 'simdref)
 
 (defvar simdref--installing nil
   "Non-nil while a private install runs.  Stops a second install.")
@@ -142,16 +157,26 @@ A server on `PATH' wins over the private copy in DIR."
   (equal (file-name-directory server)
          (file-name-as-directory (expand-file-name "bin" dir))))
 
+(defun simdref--rass-cmd (&optional dir)
+  "Return the absolute path of the rassumfrassum multiplexer, or nil.
+The private copy in DIR wins over a rass on `PATH'.  A rass on `PATH'
+is never upgraded."
+  (or (let ((bin (expand-file-name (simdref--exe "rass")
+                                   (expand-file-name "bin"
+                                                     (or dir simdref-install-dir)))))
+        (and (file-executable-p bin) bin))
+      (executable-find "rass")))
+
 (defun simdref--stamp (dir)
   "Write the install stamp in DIR.
-Call this only after `uv tool install' and `isa update' both exit 0."
+Call this only after every install step exits 0."
   (write-region "" nil (expand-file-name "installed" dir) nil 'silent))
 
 (defun simdref--installed-p (dir)
   "Return non-nil when the install in DIR is complete.
 A complete install is the server executable and the stamp file.  The
-package writes the stamp only after `uv tool install' and `isa update'
-both exit 0, so a half install never counts as installed."
+package writes the stamp only after every install step exits 0, so a
+half install never counts as installed."
   (and (file-executable-p (expand-file-name (simdref--exe "simdref-lsp")
                                             (expand-file-name "bin" dir)))
        (file-exists-p (expand-file-name "installed" dir))))
@@ -246,7 +271,7 @@ The echo-area notice prints once per Emacs session."
 
 (defun simdref--maybe-upgrade (dir)
   "Upgrade the private simdref copy in DIR once a day.
-Then refresh the catalog."
+Then upgrade the private rass copy and refresh the catalog."
   (let* ((day (floor (float-time) 86400))
          (marker (expand-file-name (format "update-%d" day) dir)))
     ;; Known race: a check that runs at midnight UTC can overlap the next
@@ -257,18 +282,28 @@ Then refresh the catalog."
       (dolist (f (directory-files dir t "\\`update-"))
         (unless (equal f marker)
           (ignore-errors (delete-file f))))
-      (let ((env (simdref--uv-env dir)))
-        ;; The refresh runs also when the upgrade failed: an offline
+      (let* ((env (simdref--uv-env dir))
+             (uv (expand-file-name (simdref--exe "uv")
+                                   (expand-file-name "uv" dir)))
+             (isa (expand-file-name (simdref--exe "isa")
+                                    (expand-file-name "bin" dir)))
+             (rass (expand-file-name (simdref--exe "rass")
+                                     (expand-file-name "bin" dir)))
+             (refresh (lambda (_code _out)
+                        (simdref--run isa '("vaddps" "--short") env t nil))))
+        ;; The refresh runs also when an upgrade failed: an offline
         ;; upgrade must not block a catalog repair.
-        (simdref--run (expand-file-name (simdref--exe "uv") (expand-file-name "uv" dir))
-                      '("tool" "upgrade" "simdref") env t
+        (simdref--run uv '("tool" "upgrade" "simdref") env t
                       (lambda (_code _out)
-                        (simdref--run (expand-file-name (simdref--exe "isa")
-                                                       (expand-file-name "bin" dir))
-                                      '("vaddps" "--short") env t nil)))))))
+                        ;; Never upgrade a rass that is not the private copy.
+                        (if (file-executable-p rass)
+                            (simdref--run uv '("tool" "upgrade" "rassumfrassum")
+                                          env t refresh)
+                          (funcall refresh nil nil))))))))
 
 (defun simdref--install (dir)
-  "Install a private simdref under DIR: pinned uv, simdref, then the catalog."
+  "Install a private simdref under DIR.
+The steps are pinned uv, simdref, rass and the catalog."
   (unless simdref--installing
     (setq simdref--installing t)
     (make-directory dir t)
@@ -312,7 +347,9 @@ Then refresh the catalog."
                                  (unless zip '("--strip-components=1")))
                    #'install-tool))
            (install-tool ()
-             (step uv '("tool" "install" "--force" "simdref") #'refresh))
+             (step uv '("tool" "install" "--force" "simdref") #'install-rass))
+           (install-rass ()
+             (step uv '("tool" "install" "--force" "rassumfrassum") #'refresh))
            (refresh ()
              (step isa '("update") #'done))
            (done ()
@@ -337,14 +374,30 @@ Then refresh the catalog."
             (simdref--install dir)))
       (simdref--install dir))))
 
+(defvar simdref--rass-log-shown nil
+  "Non-nil once this session logged the missing-multiplexer fallback.")
+
 (defun simdref--eglot-contact (&rest _args)
   "Return the eglot contact for simdref, or signal `user-error'.
+A C, C++ or CUDA buffer with `simdref-companion-server' runs both
+servers through the rassumfrassum multiplexer, when the companion and
+rass are present.  Else the contact is the simdref command alone.
 A server on `PATH' or in `simdref-install-dir' returns its command.
 With no server, start the asynchronous install and signal `user-error'.
 This function never waits for the install."
   (simdref-maintain)
-  (let ((cmd (simdref--server-cmd)))
-    (or (and cmd (list cmd))
+  (let* ((cmd (simdref--server-cmd))
+         (want (and cmd simdref-companion-server
+                    (memq major-mode simdref--c-modes)))
+         (rass (and want (simdref--rass-cmd))))
+    (when (and want (not rass) (not simdref--rass-log-shown))
+      (setq simdref--rass-log-shown t)
+      (simdref--log "rass not found, running simdref alone"))
+    (or (and cmd
+             (if (and rass (executable-find (car simdref-companion-server)))
+                 (append (list rass "--") simdref-companion-server
+                         (list "--" cmd))
+               (list cmd)))
         (user-error "Installing simdref in the background.  Run M-x eglot again when the log says the install is done"))))
 
 ;;;###autoload
@@ -362,6 +415,7 @@ This function never waits for the install."
                                      (lambda ()
                                        (let ((cmd (simdref--server-cmd)))
                                          (and cmd (list cmd)))))
+                    :add-on? t
                     :major-modes simdref--modes
                     :server-id 'simdref)))
 

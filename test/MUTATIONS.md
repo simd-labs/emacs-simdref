@@ -18,6 +18,9 @@ proves the restore with `cmp`.
 | M9 | predicate ignoring the stamp | `(file-exists-p (expand-file-name "installed" dir))` becomes `t` | `simdref-test-killed-uv-install-not-installed` |
 | M10 | display-warning reintroduced | `(message "simdref: simdref-lsp not found; %s" cause)` becomes the same call behind `(progn (display-warning 'simdref cause :warning) ...)` | `simdref-test-failed-install-quiet` |
 | M11 | contact waiting loop reintroduced | the `user-error` in `simdref--eglot-contact` becomes a `while simdref--installing` wait loop that returns the contact | `simdref-test-eglot-contact-never-waits` |
+| M12 | stamp before rass install | `(install-rass ()` becomes `(install-rass () (simdref--stamp dir)` | `simdref-test-install-rass-step-stamp-last` |
+| M13 | contact ignoring the companion check | `(if (and rass (executable-find (car simdref-companion-server)))` becomes `(if rass` | `simdref-test-contact-cxx-no-clangd` |
+| M14 | asm-mode routed through rass | `(memq major-mode simdref--c-modes)` becomes `t` | `simdref-test-contact-asm-no-rass` |
 
 The throttle mutation target is the time gate (M1). The named test
 fails when a same-day restart re-runs the network step.
@@ -50,3 +53,29 @@ M6 note: the first run of M6 replaced the whole run form with `nil`
 and left one unbalanced paren. The load then aborted before any test
 ran, which is no result. The table holds the corrected edit that keeps
 the parens balanced. With the corrected edit the named test fails.
+
+## Results at the rassumfrassum commit
+
+Each run: full suite in the container, named test must fail. The
+restore copies `simdref.el` back from the pristine copy and `cmp`
+proves it byte-identical (`cmp exit=0`). All fourteen mutations run
+again at this commit, old ones included.
+
+| id | named test result | verdict |
+|----|-------------------|---------|
+| M1 | `simdref-test-throttle-skips-same-day` FAILED | failed-loud |
+| M2 | `simdref-test-install-rejects-bad-sha` FAILED | failed-loud |
+| M3 | `simdref-test-path-install-untouched` FAILED | failed-loud |
+| M4 | `simdref-test-todays-marker-kept` FAILED | failed-loud |
+| M5 | `simdref-test-missing-executable-quiet` FAILED | failed-loud |
+| M6 | `simdref-test-refresh-after-failed-upgrade` FAILED | failed-loud |
+| M7 | `simdref-test-nonzero-louder-than-success` FAILED | failed-loud |
+| M8 | `simdref-test-failed-isa-update-no-stamp` FAILED | failed-loud |
+| M9 | `simdref-test-killed-uv-install-not-installed` FAILED | failed-loud |
+| M10 | `simdref-test-failed-install-quiet` FAILED | failed-loud |
+| M11 | `simdref-test-eglot-contact-never-waits` FAILED | failed-loud |
+| M12 | `simdref-test-install-rass-step-stamp-last` FAILED | failed-loud |
+| M13 | `simdref-test-contact-cxx-no-clangd` FAILED | failed-loud |
+| M14 | `simdref-test-contact-asm-no-rass` FAILED | failed-loud |
+
+All fourteen mutations are caught. Every restore is clean.
