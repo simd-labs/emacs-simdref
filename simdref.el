@@ -29,6 +29,10 @@
 ;; package upgrades that copy and refreshes the catalog.  A server on
 ;; `PATH' belongs to the user; the package never touches it.  A new
 ;; simdref version takes effect at the next server start.
+;;
+;; Maintenance never opens a window and never blocks.  Success lines go
+;; to the `*simdref-log*' buffer only.  A failure logs there and shows
+;; one echo-area line that starts with "simdref:" and names the step.
 
 ;;; Code:
 
@@ -73,21 +77,37 @@ A stuck step must not hang forever.")
   :type 'string
   :group 'simdref)
 
-(defconst simdref--modes '(asm-mode c-mode c++-mode c-ts-mode c++-ts-mode)
+(defconst simdref--modes
+  '(asm-mode nasm-mode cuda-mode c-mode c++-mode c-ts-mode c++-ts-mode)
   "Major modes that get the simdref server.")
 
 (defvar simdref--installing nil
   "Non-nil while a private install runs.  Stops a second install.")
 
-(defun simdref--log (fmt &rest args)
-  "Log a plain success line with a `simdref' prefix.
-FMT and ARGS follow `message'."
-  (message "simdref: %s" (apply #'format fmt args)))
+(defvar simdref--notice-shown nil
+  "Non-nil once this session echoed the missing-server notice.
+The notice prints at most once per Emacs session.")
 
-(defun simdref--warn (level fmt &rest args)
-  "Show a `simdref' warning at LEVEL.  FMT and ARGS follow `format'.
-LEVEL :debug never pops up a window.  See `display-warning'."
-  (display-warning 'simdref (apply #'format fmt args) level))
+(defun simdref--log (fmt &rest args)
+  "Append one line to the `*simdref-log*' buffer.
+FMT and ARGS follow `format'.  Success lines log here only."
+  (with-current-buffer (get-buffer-create "*simdref-log*")
+    (goto-char (point-max))
+    (insert (format "simdref: %s\n" (apply #'format fmt args)))))
+
+(defun simdref--echo (fmt &rest args)
+  "Log like `simdref--log' and show one \"simdref:\" echo-area line.
+FMT and ARGS follow `format'.  Failure lines use this.  It is louder
+than success and it opens no window."
+  (let ((line (apply #'format fmt args)))
+    (simdref--log "%s" line)
+    (message "simdref: %s" line)))
+
+(defun simdref--report (loud fmt &rest args)
+  "Log the line from FMT and ARGS, and echo it when LOUD is non-nil."
+  (if loud
+      (apply #'simdref--echo fmt args)
+    (apply #'simdref--log fmt args)))
 
 (defun simdref--exe (name)
   "Return NAME with an exe suffix on Windows."
@@ -122,25 +142,49 @@ A server on `PATH' wins over the private copy in DIR."
   (equal (file-name-directory server)
          (file-name-as-directory (expand-file-name "bin" dir))))
 
-(defun simdref--exit-log (level program args code out)
-  "Log the exit of PROGRAM with ARGS at LEVEL.
-CODE is nonzero on failure.  OUT holds the program output."
-  (if (zerop code)
-      (simdref--log "%s %s: ok" (file-name-nondirectory program) (string-join args " "))
-    (simdref--warn level "%s %s: exit %d: %s" (file-name-nondirectory program)
-                   (string-join args " ") code (string-trim out))))
+(defun simdref--stamp (dir)
+  "Write the install stamp in DIR.
+Call this only after `uv tool install' and `isa update' both exit 0."
+  (write-region "" nil (expand-file-name "installed" dir) nil 'silent))
 
-(defun simdref--run (program args env level on-exit)
+(defun simdref--installed-p (dir)
+  "Return non-nil when the install in DIR is complete.
+A complete install is the server executable and the stamp file.  The
+package writes the stamp only after `uv tool install' and `isa update'
+both exit 0, so a half install never counts as installed."
+  (and (file-executable-p (expand-file-name (simdref--exe "simdref-lsp")
+                                            (expand-file-name "bin" dir)))
+       (file-exists-p (expand-file-name "installed" dir))))
+
+(defun simdref--exit-log (loud program args code out)
+  "Log the exit of PROGRAM with ARGS to the log buffer.
+CODE is nonzero on failure.  OUT holds the program output.  Echo the
+failure when LOUD is non-nil."
+  (let* ((step (format "%s %s" (file-name-nondirectory program)
+                       (string-join args " ")))
+         (detail (string-trim out)))
+    (if (zerop code)
+        (simdref--log "%s: ok" step)
+      (let ((line (if (string-empty-p detail)
+                      (format "%s: exit %d" step code)
+                    (format "%s: exit %d: %s" step code detail))))
+        (if loud (simdref--echo "%s" line) (simdref--log "%s" line))))))
+
+(defun simdref--run (program args env loud on-exit)
   "Run PROGRAM with ARGS in the background.
-ENV is a list of NAME=VALUE strings.  Log the exit at LEVEL.  Call
-ON-EXIT with the exit code and the output.  Return the process, or
-nil when PROGRAM is missing."
+ENV is a list of NAME=VALUE strings.  Log every exit to the log
+buffer, and echo failures when LOUD is non-nil.  Call ON-EXIT with
+the exit code and the output.  Return the process, or nil when
+PROGRAM is missing."
   ;; Look up a bare name on PATH.  Use an absolute path as is.
   (setq program (if (file-name-absolute-p program)
                     program
                   (or (executable-find program) program)))
   (if (not (file-executable-p program))
-      (progn (simdref--warn :debug "spawn skipped, %s is missing" program) nil)
+      (progn (simdref--report loud "%s %s: spawn skipped, %s is missing"
+                              (file-name-nondirectory program)
+                              (string-join args " ") program)
+             nil)
     (let ((buf (generate-new-buffer " *simdref*"))
           proc timer)
       (setq proc
@@ -156,15 +200,18 @@ nil when PROGRAM is missing."
                        (let ((code (process-exit-status p))
                              (out (with-current-buffer buf (buffer-string))))
                          (kill-buffer buf)
-                         (simdref--exit-log level program args code out)
+                         (simdref--exit-log loud program args code out)
                          (when on-exit (funcall on-exit code out)))))))
-              (error (simdref--warn :debug "spawn failed: %s" (error-message-string err))
+              (error (simdref--report loud "%s %s: spawn failed: %s"
+                                      (file-name-nondirectory program)
+                                      (string-join args " ")
+                                      (error-message-string err))
                      nil)))
       (when proc
         (setq timer
               (run-at-time simdref--timeout nil
                            (lambda ()
-                             (simdref--warn level "timeout, killing %s" program)
+                             (simdref--log "timeout, killing %s" program)
                              (ignore-errors (delete-process proc))))))
       proc)))
 
@@ -186,13 +233,16 @@ An existing marker means another process did today's check already."
   (condition-case nil
       (progn (write-region "" nil marker nil 'silent nil 'excl) t)
     (file-already-exists nil)
-    (error (simdref--warn :debug "marker %s failed" marker) nil)))
+    (error (simdref--log "marker %s failed" marker) nil)))
 
 (defun simdref--missing-notice (cause)
-  "Warn that the server is missing.  CAUSE names the failed step."
-  (simdref--warn :warning
-                 "simdref-lsp not found. Run: uv tool install simdref && isa update\n%s\n%s"
-                 "https://github.com/simd-labs/simdref" cause))
+  "Log that the server is missing and name CAUSE as the failed step.
+The echo-area notice prints once per Emacs session."
+  (simdref--log "simdref-lsp not found.  Run: uv tool install simdref && isa update\n%s\n%s"
+                "https://github.com/simd-labs/simdref" cause)
+  (unless simdref--notice-shown
+    (setq simdref--notice-shown t)
+    (message "simdref: simdref-lsp not found; %s" cause)))
 
 (defun simdref--maybe-upgrade (dir)
   "Upgrade the private simdref copy in DIR once a day.
@@ -211,11 +261,11 @@ Then refresh the catalog."
         ;; The refresh runs also when the upgrade failed: an offline
         ;; upgrade must not block a catalog repair.
         (simdref--run (expand-file-name (simdref--exe "uv") (expand-file-name "uv" dir))
-                      '("tool" "upgrade" "simdref") env :debug
+                      '("tool" "upgrade" "simdref") env t
                       (lambda (_code _out)
                         (simdref--run (expand-file-name (simdref--exe "isa")
                                                        (expand-file-name "bin" dir))
-                                      '("vaddps" "--short") env :debug nil)))))))
+                                      '("vaddps" "--short") env t nil)))))))
 
 (defun simdref--install (dir)
   "Install a private simdref under DIR: pinned uv, simdref, then the catalog."
@@ -239,13 +289,16 @@ Then refresh the catalog."
              (setq simdref--installing nil)
              (simdref--missing-notice cause))
            (step (program args on-done)
-             (unless (simdref--run program args env :debug
+             (unless (simdref--run program args env nil
                                    (lambda (code out)
                                      (if (zerop code)
                                          (funcall on-done)
-                                       (fail (format "%s %s failed: %s" program
+                                       (fail (format "%s %s failed%s" program
                                                      (string-join args " ")
-                                                     (string-trim out))))))
+                                                     (let ((detail (string-trim out)))
+                                                       (if (string-empty-p detail)
+                                                           ""
+                                                         (format ": %s" detail))))))))
                (fail (format "%s is missing" program))))
            (download (url dest on-done)
              (step "curl" (list "-fsSL" "-o" dest url) on-done))
@@ -259,12 +312,13 @@ Then refresh the catalog."
                                  (unless zip '("--strip-components=1")))
                    #'install-tool))
            (install-tool ()
-             (step uv '("tool" "install" "simdref") #'refresh))
+             (step uv '("tool" "install" "--force" "simdref") #'refresh))
            (refresh ()
              (step isa '("update") #'done))
            (done ()
              (setq simdref--installing nil)
-             (simdref--log "installed %s" (expand-file-name (simdref--exe "simdref-lsp") bin))))
+             (simdref--stamp dir)
+             (simdref--echo "install done, run M-x eglot")))
         (if (not base)
             (fail (format "no uv build for %s" system-configuration))
           (download base archive
@@ -278,18 +332,20 @@ Then refresh the catalog."
          (server (simdref--server-cmd dir)))
     (if server
         (when (simdref--managed-p server dir)
-          (simdref--maybe-upgrade dir))
+          (if (simdref--installed-p dir)
+              (simdref--maybe-upgrade dir)
+            (simdref--install dir)))
       (simdref--install dir))))
 
 (defun simdref--eglot-contact (&rest _args)
-  "Return the eglot contact for simdref, or nil when the server is missing.
-A first install finishes before this returns, so eglot can start."
+  "Return the eglot contact for simdref, or signal `user-error'.
+A server on `PATH' or in `simdref-install-dir' returns its command.
+With no server, start the asynchronous install and signal `user-error'.
+This function never waits for the install."
   (simdref-maintain)
-  (let ((deadline (+ (float-time) 7200)))
-    (while (and simdref--installing (< (float-time) deadline))
-      (accept-process-output nil 0.1)))
   (let ((cmd (simdref--server-cmd)))
-    (and cmd (list cmd))))
+    (or (and cmd (list cmd))
+        (user-error "Installing simdref in the background.  Run M-x eglot again when the log says the install is done"))))
 
 ;;;###autoload
 (with-eval-after-load 'eglot
@@ -299,6 +355,8 @@ A first install finishes before this returns, so eglot can start."
 ;;;###autoload
 (with-eval-after-load 'lsp-mode
   (add-to-list 'lsp-language-id-configuration '(asm-mode . "asm"))
+  (add-to-list 'lsp-language-id-configuration '(nasm-mode . "nasm"))
+  (add-to-list 'lsp-language-id-configuration '(cuda-mode . "cuda"))
   (lsp-register-client
    (make-lsp-client :new-connection (lsp-stdio-connection
                                      (lambda ()

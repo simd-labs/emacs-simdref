@@ -4,11 +4,6 @@
 
 ;; Author: Marco Barbone <mbarbone@flatironinstitute.org>
 
-;; This program is free software: you can redistribute it and/or modify
-;; it under the terms of the GNU General Public License as published by
-;; the Free Software Foundation, either version 3 of the License, or
-;; (at your option) any later version.
-
 ;;; Commentary:
 
 ;; Each test drives `simdref-maintain', the real entry point, with fake
@@ -32,9 +27,9 @@
   "Return the path of the fake script NAME."
   (expand-file-name name simdref-test--fakes))
 
-;; Loading simdref.el runs one maintenance pass.  Give it a managed
-;; server and today's marker in the default install dir, so that pass
-;; spawns nothing and every test stays offline.
+;; Loading simdref.el runs one maintenance pass.  Give it a complete
+;; managed install and today's marker in the default install dir, so
+;; that pass spawns nothing and every test stays offline.
 (setq user-emacs-directory
       (file-name-as-directory (make-temp-file "simdref-test-home" t)))
 (let* ((dir (locate-user-emacs-file "simdref/"))
@@ -42,6 +37,7 @@
   (make-directory (file-name-directory server) t)
   (copy-file (simdref-test--fake "server.sh") server t)
   (set-file-modes server #o755)
+  (write-region "" nil (expand-file-name "installed" dir))
   (write-region "" nil
                 (expand-file-name (format "update-%d" (floor (float-time) 86400)) dir)))
 
@@ -49,9 +45,6 @@
 
 (defvar simdref-test--log nil
   "Path of the argv log that the fakes append to.")
-
-(defvar simdref-test--events nil
-  "Captured `message' and `display-warning' calls.")
 
 (defun simdref-test--log-contents ()
   "Return the current argv log contents."
@@ -61,6 +54,32 @@
         (buffer-string))
     ""))
 
+(defun simdref-test--reflog ()
+  "Return the contents of the `*simdref-log*' buffer."
+  (if (get-buffer "*simdref-log*")
+      (with-current-buffer "*simdref-log*" (buffer-string))
+    ""))
+
+(defun simdref-test--messages ()
+  "Return the contents of the `*Messages*' buffer."
+  (if (get-buffer "*Messages*")
+      (with-current-buffer "*Messages*" (buffer-string))
+    ""))
+
+(defun simdref-test--clear-messages ()
+  "Erase the `*Messages*' buffer."
+  (with-current-buffer (get-buffer-create "*Messages*")
+    (let ((inhibit-read-only t))
+      (erase-buffer))))
+
+(defun simdref-test--count (regexp string)
+  "Count the matches of REGEXP in STRING."
+  (let ((n 0) (start 0))
+    (while (string-match regexp string start)
+      (setq n (1+ n)
+            start (match-end 0)))
+    n))
+
 (defun simdref-test--wait (pred &optional seconds)
   "Run the event loop until PRED returns non-nil.  Wait at most SECONDS."
   (let ((deadline (+ (float-time) (or seconds 60))))
@@ -68,21 +87,27 @@
       (accept-process-output nil 0.05))
     (funcall pred)))
 
-(defun simdref-test--capture (fn)
-  "Run FN with `message' and `display-warning' captured.  Return the events."
-  (let ((simdref-test--events nil))
-    (cl-letf (((symbol-function 'display-warning)
-               (lambda (_type msg &optional level &rest _)
-                 (push (list :warn level msg) simdref-test--events)))
-              ((symbol-function 'message)
-               (lambda (fmt &rest args)
-                 (push (list :message (apply #'format fmt args)) simdref-test--events))))
-      (funcall fn))
-    (nreverse simdref-test--events)))
+(defvar simdref-test--lines nil
+  "Recorded `message' lines of the current capture.")
 
-(defun simdref-test--events-matching (events regexp)
-  "Return the first of EVENTS whose text matches REGEXP."
-  (cl-find-if (lambda (e) (string-match-p regexp (car (last e)))) events))
+(defun simdref-test--capture (fn)
+  "Run FN with `message' recording onto `simdref-test--lines'.
+Return the recorded lines.  The real `message' still runs, so
+`*Messages*' stays accurate.  The tests check `*Warnings*' against
+the real `display-warning'."
+  (let ((simdref-test--lines nil)
+        (real (symbol-function 'message)))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (let ((line (apply #'format fmt args)))
+                   (push line simdref-test--lines)
+                   (apply real fmt args)))))
+      (funcall fn))
+    (nreverse simdref-test--lines)))
+
+(defun simdref-test--simdref-messages (lines)
+  "Return the lines in LINES that the package echoed."
+  (cl-remove-if-not (lambda (l) (string-prefix-p "simdref: " l)) lines))
 
 (defvar simdref-test--tmp-root nil
   "Install dir of the current sandbox.")
@@ -101,7 +126,10 @@ The install dir starts out missing: the package must create it."
                          (format "SIMDREF_TEST_FAKE_ISA=%s" (simdref-test--fake "isa.sh"))
                          (format "SIMDREF_TEST_FAKE_LSP=%s" (simdref-test--fake "server.sh")))
                    process-environment))
-          (simdref--installing nil))
+          (simdref--installing nil)
+          (simdref--notice-shown nil))
+     (when (get-buffer "*simdref-log*")
+       (kill-buffer "*simdref-log*"))
      ,@body))
 
 (defun simdref-test--put (src dst)
@@ -111,13 +139,15 @@ The install dir starts out missing: the package must create it."
   (set-file-modes dst #o755))
 
 (defun simdref-test--setup-daily ()
-  "Place the fake uv, isa and server where the daily check finds them."
+  "Place the fake uv, isa and server where the daily check finds them.
+This is a complete install: the server, the tools and the stamp."
   (simdref-test--put (simdref-test--fake "uv.sh")
                      (expand-file-name "uv/uv" simdref-test--tmp-root))
   (simdref-test--put (simdref-test--fake "isa.sh")
                      (expand-file-name "bin/isa" simdref-test--tmp-root))
   (simdref-test--put (simdref-test--fake "server.sh")
-                     (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root)))
+                     (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root))
+  (write-region "" nil (expand-file-name "installed" simdref-test--tmp-root)))
 
 (defun simdref-test--stage-uv (tmp corrupt)
   "Stage a uv archive and sidecar under TMP.  Return the base file URL.
@@ -151,26 +181,27 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
     (let ((process-environment process-environment))
       (setenv "SIMDREF_TEST_UV_EXIT" "0")
       (setenv "UV_TOOL_BIN_DIR" (expand-file-name "bin" simdref-test--tmp-root))
-      (call-process (simdref-test--fake "uv.sh") nil nil nil "tool" "install" "simdref")
+      (call-process (simdref-test--fake "uv.sh") nil nil nil "tool" "install" "--force" "simdref")
       (call-process (simdref-test--fake "isa.sh") nil nil nil "update")
       (call-process (simdref-test--fake "server.sh") nil nil nil))
     ;; Positive control: the fakes above really ran and logged argv.
     (let ((log (simdref-test--log-contents)))
-      (should (string-match-p "uv tool install simdref" log))
+      (should (string-match-p "uv tool install --force simdref" log))
       (should (string-match-p "isa update" log))
       (should (string-match-p "lsp" log)))))
 
 (ert-deftest simdref-test-first-install ()
   "No server: install downloads pinned uv, installs simdref, runs isa update."
   (simdref-test--with-sandbox
-    (let ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root nil)))
+    (let ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root nil))
+          (stamp (expand-file-name "installed" simdref-test--tmp-root)))
       (simdref-maintain)
-      (should (simdref-test--wait
-               (lambda () (string-match-p "isa update" (simdref-test--log-contents))) 120)))
+      ;; The stamp lands only when the whole chain exited 0.
+      (should (simdref-test--wait (lambda () (file-exists-p stamp)) 120)))
     (let ((log (simdref-test--log-contents)))
-      (should (string-match-p "uv tool install simdref" log))
+      (should (string-match-p "uv tool install --force simdref" log))
       (should (string-match-p "isa update" log))
-      (should (< (string-match "uv tool install simdref" log)
+      (should (< (string-match "uv tool install --force simdref" log)
                  (string-match "isa update" log))))
     (should (file-executable-p (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root)))))
 
@@ -178,22 +209,27 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
   "A wrong sha256 sidecar must stop the install before any uv run."
   (simdref-test--with-sandbox
     (let ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root t))
-          (events nil))
-      (setq events
+          (lines nil))
+      (setq lines
             (simdref-test--capture
              (lambda ()
                (simdref-maintain)
                (should (simdref-test--wait
                         (lambda ()
-                          (simdref-test--events-matching
-                           simdref-test--events "checksum mismatch"))
+                          (cl-find-if
+                           (lambda (l) (string-match-p "checksum mismatch" l))
+                           (simdref-test--simdref-messages simdref-test--lines)))
                         120)))))
       ;; The download ran for real; the sha check rejected it.
       (should (file-exists-p (expand-file-name "uv.tar.gz" simdref-test--tmp-root)))
       (should (not (string-match-p "tool install" (simdref-test--log-contents))))
-      (let ((notice (simdref-test--events-matching events "simdref-lsp not found")))
+      ;; The failure is one echo-area line, and it names the step.
+      (let ((notice (cl-find-if
+                     (lambda (l) (string-match-p "simdref-lsp not found" l))
+                     (simdref-test--simdref-messages lines))))
         (should notice)
-        (should (eq (nth 1 notice) :warning))))))
+        (should (string-match-p "checksum mismatch" notice)))
+      (should (not (get-buffer "*Warnings*"))))))
 
 (ert-deftest simdref-test-daily-check ()
   "The daily check runs uv tool upgrade, then isa vaddps --short."
@@ -247,17 +283,19 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
     (should (null (directory-files simdref-test--tmp-root nil "\\`update-")))))
 
 (ert-deftest simdref-test-missing-executable-quiet ()
-  "A missing executable logs quietly: no spawn error and no popup."
+  "A missing executable pops no window and echoes one line naming the step."
   (simdref-test--with-sandbox
     (simdref-test--put (simdref-test--fake "server.sh")
                        (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root))
-    (let ((events (simdref-test--capture #'simdref-maintain)))
-      (should (cl-find-if (lambda (e) (string-match-p "spawn skipped" (car (last e)))) events))
-      ;; No popup: nothing at :warning or above.
-      (should (cl-every (lambda (e)
-                          (or (eq (car e) :message)
-                              (not (memq (nth 1 e) '(:warning :error :emergency)))))
-                        events)))))
+    (write-region "" nil (expand-file-name "installed" simdref-test--tmp-root))
+    (let ((lines (simdref-test--capture #'simdref-maintain)))
+      (should (string-match-p "spawn skipped" (simdref-test--reflog)))
+      (let ((echo (cl-find-if
+                   (lambda (l) (string-match-p "spawn skipped" l))
+                   (simdref-test--simdref-messages lines))))
+        (should echo)
+        (should (string-match-p "uv tool upgrade simdref" echo)))
+      (should (not (get-buffer "*Warnings*"))))))
 
 (ert-deftest simdref-test-refresh-after-failed-upgrade ()
   "The catalog refresh runs even when the upgrade exits nonzero."
@@ -270,40 +308,110 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
     (should (string-match-p "uv tool upgrade simdref" (simdref-test--log-contents)))))
 
 (ert-deftest simdref-test-nonzero-louder-than-success ()
-  "A nonzero exit is logged at the warning channel; success is a plain line."
-  (let (ok-events bad-events)
-    (simdref-test--with-sandbox
-      (simdref-test--setup-daily)
-      (setq ok-events
+  "A nonzero exit reaches the echo area.  Success stays in the log buffer."
+  ;; Success: the line lands in `*simdref-log*', never in `*Messages*'.
+  (simdref-test--with-sandbox
+    (simdref-test--setup-daily)
+    (simdref-test--clear-messages)
+    (simdref-maintain)
+    (should (simdref-test--wait
+             (lambda ()
+               (string-match-p "isa vaddps --short: ok" (simdref-test--reflog)))))
+    (should (string-match-p "isa vaddps --short: ok" (simdref-test--reflog)))
+    (should (not (string-match-p "simdref:" (simdref-test--messages))))
+    (should (not (get-buffer "*Warnings*"))))
+  ;; Nonzero: the failure reaches `*Messages*', still with no popup.
+  (simdref-test--with-sandbox
+    (simdref-test--setup-daily)
+    (setenv "SIMDREF_TEST_UV_EXIT" "1")
+    (simdref-test--clear-messages)
+    (simdref-maintain)
+    (should (simdref-test--wait
+             (lambda ()
+               (string-match-p "isa vaddps --short: ok" (simdref-test--reflog)))))
+    (should (string-match-p "simdref: uv tool upgrade simdref: exit 1"
+                            (simdref-test--messages)))
+    (should (not (get-buffer "*Warnings*")))))
+
+(ert-deftest simdref-test-failed-install-quiet ()
+  "A failed first install pops no window and echoes one line, only once."
+  (simdref-test--with-sandbox
+    (let ((simdref-uv-base-url "file:///nonexistent-simdref/")
+          (lines nil))
+      (setq lines
             (simdref-test--capture
              (lambda ()
                (simdref-maintain)
-               (should (simdref-test--wait
-                        (lambda ()
-                          (string-match-p "isa vaddps --short" (simdref-test--log-contents)))))))))
-    (simdref-test--with-sandbox
-      (simdref-test--setup-daily)
-      (setenv "SIMDREF_TEST_UV_EXIT" "1")
-      (setq bad-events
-            (simdref-test--capture
-             (lambda ()
+               (should (simdref-test--wait (lambda () (null simdref--installing)) 60))
+               ;; A retry must not repeat the notice.
                (simdref-maintain)
-               (should (simdref-test--wait
-                        (lambda ()
-                          (string-match-p "isa vaddps --short" (simdref-test--log-contents)))))))))
-    ;; Success is a plain message line only.
-    (should (cl-every (lambda (e) (eq (car e) :message)) ok-events))
-    ;; The nonzero exit is louder: it goes to `display-warning'.
-    (let ((warn (cl-find-if (lambda (e) (eq (car e) :warn)) bad-events)))
-      (should warn)
-      ;; Maintenance failures stay at :debug and never pop up a window.
-      (should (eq (nth 1 warn) :debug)))))
+               (should (simdref-test--wait (lambda () (null simdref--installing)) 60)))))
+      (should (not (get-buffer "*Warnings*")))
+      (let ((echo (simdref-test--simdref-messages lines)))
+        (should (= 1 (length echo)))
+        (should (string-prefix-p "simdref: " (car echo)))
+        (should (string-match-p "simdref-lsp not found" (car echo)))
+        (should (string-match-p "curl" (car echo)))))))
+
+(ert-deftest simdref-test-eglot-contact-never-waits ()
+  "With no server the contact signals `user-error' and returns within 1 s."
+  (simdref-test--with-sandbox
+    (let* ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root nil))
+           (start (float-time))
+           (err (should-error (simdref--eglot-contact) :type 'user-error)))
+      (should (< (- (float-time) start) 1.0))
+      (should (string-match-p "M-x eglot" (cadr err)))
+      ;; The contact started the asynchronous install.
+      (should simdref--installing)
+      (should (not (get-buffer "*Warnings*")))
+      ;; Drain the background install so no later test sees its messages.
+      (should (simdref-test--wait (lambda () (null simdref--installing)) 60)))))
+
+(ert-deftest simdref-test-failed-isa-update-no-stamp ()
+  "A failed isa update leaves no stamp.  The next call reruns both steps."
+  (simdref-test--with-sandbox
+    (let ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root nil))
+          (stamp (expand-file-name "installed" simdref-test--tmp-root)))
+      (setenv "SIMDREF_TEST_ISA_EXIT" "1")
+      (simdref-maintain)
+      (should (simdref-test--wait (lambda () (null simdref--installing)) 60))
+      (should (file-executable-p (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root)))
+      (should (not (file-exists-p stamp)))
+      (setenv "SIMDREF_TEST_ISA_EXIT" "0")
+      (simdref-maintain)
+      (should (simdref-test--wait (lambda () (file-exists-p stamp)) 60))
+      (let ((log (simdref-test--log-contents)))
+        (should (= 2 (simdref-test--count "uv tool install --force simdref" log)))
+        (should (= 2 (simdref-test--count "isa update" log)))))))
+
+(ert-deftest simdref-test-killed-uv-install-not-installed ()
+  "A killed uv tool install is not installed, even with the lsp shim in place."
+  (simdref-test--with-sandbox
+    (let ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root nil))
+          (simdref--timeout 2)
+          (stamp (expand-file-name "installed" simdref-test--tmp-root)))
+      (setenv "SIMDREF_TEST_UV_SLEEP" "60")
+      (simdref-maintain)
+      (should (simdref-test--wait (lambda () (null simdref--installing)) 60))
+      ;; The shim exists, but the install never completed.
+      (should (file-executable-p (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root)))
+      (should (not (file-exists-p stamp)))
+      (should (not (simdref--installed-p simdref-test--tmp-root)))
+      ;; The next call reruns install and this time reaches isa update.
+      (setenv "SIMDREF_TEST_UV_SLEEP" "0")
+      (let ((before (simdref-test--log-contents)))
+        (simdref-maintain)
+        (should (simdref-test--wait (lambda () (file-exists-p stamp)) 60))
+        (let ((new (substring (simdref-test--log-contents) (length before))))
+          (should (string-match-p "uv tool install --force simdref" new))
+          (should (string-match-p "isa update" new)))))))
 
 (ert-deftest simdref-test-eglot-registration ()
   "eglot-server-programs maps every listed mode to the simdref contact."
   (require 'eglot)
   (dolist (mode simdref--modes)
-    (should (memq mode '(asm-mode c-mode c++-mode c-ts-mode c++-ts-mode)))
+    (should (memq mode '(asm-mode nasm-mode cuda-mode
+                                  c-mode c++-mode c-ts-mode c++-ts-mode)))
     (should (cl-find-if
              (lambda (entry)
                (let ((modes (car entry)))

@@ -17,14 +17,23 @@ The catalog is local, so the server answers without network.
 (require 'simdref)
 ```
 
-The package registers `simdref-lsp` with eglot for `asm-mode`, `c-mode`,
-`c++-mode`, `c-ts-mode` and `c++-ts-mode`. When lsp-mode is loaded, it
-registers the server there too.
+The package registers `simdref-lsp` with eglot for `asm-mode`, `nasm-mode`,
+`cuda-mode`, `c-mode`, `c++-mode`, `c-ts-mode` and `c++-ts-mode`. When
+lsp-mode is loaded, it registers the server there too.
 
-Without a server on `PATH`, the package installs it in the background to
-`(locate-user-emacs-file "simdref/")`, then starts it. The first
-`M-x eglot` waits for that install. It downloads a pinned `uv`, installs
-`simdref` and the catalog. This takes minutes.
+## First start
+
+Without a server on `PATH`, the package installs one in the background to
+`(locate-user-emacs-file "simdref/")`. It downloads a pinned `uv`, installs
+`simdref` and the catalog. This takes minutes and never blocks Emacs.
+`M-x eglot` during the install starts nothing and shows this error:
+
+```
+Installing simdref in the background.  Run M-x eglot again when the log says the install is done.
+```
+
+When the echo area shows `simdref: install done, run M-x eglot`, run
+`M-x eglot` again.
 
 Once a day the package upgrades that copy and refreshes the catalog. A
 new simdref version takes effect at the next server start. A server on
@@ -32,11 +41,16 @@ new simdref version takes effect at the next server start. A server on
 
 Set `simdref-install-dir` to move the private install.
 
-If the install fails, the package shows:
+## Logging
+
+Maintenance never opens a window. Success lines go to the `*simdref-log*`
+buffer only. A failure (nonzero exit, timeout kill, missing executable,
+sha mismatch) logs to that buffer and shows one echo-area line that
+starts with `simdref:` and names the step that failed. The missing-server
+notice prints once per Emacs session. A failed install shows for example:
 
 ```
-simdref-lsp not found. Run: uv tool install simdref && isa update
-https://github.com/simd-labs/simdref
+simdref: simdref-lsp not found; curl -fsSL ... failed: exit 6
 ```
 
 ## Test
