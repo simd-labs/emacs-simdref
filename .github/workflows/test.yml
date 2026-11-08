@@ -1,0 +1,19 @@
+name: test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # The suite runs in the same image as test/podman/Containerfile:
+    # debian trixie, emacs-nox, and the rass venv for the preset test.
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+      - name: install emacs and the rass venv
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            emacs-nox ca-certificates curl gzip git tar python3 python3-venv
+          python3 -m venv /opt/rass
+          /opt/rass/bin/pip install --no-cache-dir 'rassumfrassum>=0.3.5,<0.4'
+      - name: run the suite
+        run: bash test/podman/run.sh

@@ -70,6 +70,17 @@
                      ("aarch64" . "aarch64-pc-windows-msvc"))))
   "Release triples keyed by OS and CPU.  Same map as the vscode extension.")
 
+(defconst simdref--uv-sha256
+  '(("x86_64-unknown-linux-gnu" . "9167d72b3319674b6303c4cbe071854bba13ebdf3d76b1a7cbdc175471fb66d6")
+    ("aarch64-unknown-linux-gnu" . "6524bd338177ed50d035d39354e12545e993bbeba2ecbddf0480c5b3a81d313f")
+    ("x86_64-apple-darwin" . "960da44cb4b73685206ddd250b19e0a117fa41095710c1038f081f5cb613efb4")
+    ("aarch64-apple-darwin" . "50487ae565ccd96e499056b4674d438f4c53170202617b4c759defe0c6a1b544")
+    ("x86_64-pc-windows-msvc" . "75d05de6762778c31ee183398de7dd15093fad0ed90b1f236d8205ea5ec00c90")
+    ("aarch64-pc-windows-msvc" . "13294e232ececbe709c06b74e6ced06f2a225ea5591476685362f22be56a50d5"))
+  "Pinned sha256 of the uv 0.12.23 archive of each release triple.
+The install checks the downloaded archive against this value.  Bump
+the version and these values together in one edit.")
+
 (defconst simdref--timeout 600
   "Timeout in seconds for each subprocess.
 A stuck step must not hang forever.")
@@ -87,6 +98,10 @@ A stuck step must not hang forever.")
 (defconst simdref--c-modes
   '(cuda-mode c-mode c++-mode c-ts-mode c++-ts-mode)
   "Major modes that share the buffer with `simdref-companion-server'.")
+
+(defconst simdref--asm-modes
+  '(asm-mode nasm-mode)
+  "Major modes that run the simdref server alone.")
 
 (defcustom simdref-companion-server '("clangd")
   "Command list of the companion LSP server for C, C++ and CUDA buffers.
@@ -240,17 +255,15 @@ PROGRAM is missing."
                              (ignore-errors (delete-process proc))))))
       proc)))
 
-(defun simdref--sha256-match-p (file checksum-file)
-  "Return non-nil when the sha256 of FILE matches CHECKSUM-FILE.
-The checksum is the first token in CHECKSUM-FILE."
-  (when (and (file-readable-p file) (file-readable-p checksum-file))
-    (let ((want (with-temp-buffer
-                  (insert-file-contents checksum-file)
-                  (car (split-string (buffer-string)))))
-          (got (with-temp-buffer
+(defun simdref--sha256-match-p (file expected)
+  "Return non-nil when the sha256 of FILE is the hex digest EXPECTED.
+EXPECTED is the pinned value in `simdref--uv-sha256'.  A nil EXPECTED
+never matches."
+  (when (and expected (file-readable-p file))
+    (let ((got (with-temp-buffer
                  (insert-file-contents-literally file)
                  (secure-hash 'sha256 (current-buffer)))))
-      (and want (string-equal (downcase want) got)))))
+      (string-equal (downcase expected) got))))
 
 (defun simdref--claim-marker (marker)
   "Create MARKER with an exclusive create.  Return non-nil on success.
@@ -260,14 +273,18 @@ An existing marker means another process did today's check already."
     (file-already-exists nil)
     (error (simdref--log "marker %s failed" marker) nil)))
 
+(defconst simdref--not-found-text
+  "simdref not found. Install it: uv tool install simdref (or pip install simdref), then run isa update. Instructions: https://github.com/simd-labs/simdref"
+  "Missing-server text.  Same string as the other simdref extensions.")
+
 (defun simdref--missing-notice (cause)
-  "Log that the server is missing and name CAUSE as the failed step.
-The echo-area notice prints once per Emacs session."
-  (simdref--log "simdref-lsp not found.  Run: uv tool install simdref && isa update\n%s\n%s"
-                "https://github.com/simd-labs/simdref" cause)
+  "Report the missing server and name CAUSE as the failed step.
+The text is the shared not-found sentence.  The echo-area notice
+prints once per Emacs session."
+  (simdref--log "%s Failed step: %s" simdref--not-found-text cause)
   (unless simdref--notice-shown
     (setq simdref--notice-shown t)
-    (message "simdref: simdref-lsp not found; %s" cause)))
+    (message "simdref: %s Failed step: %s" simdref--not-found-text cause)))
 
 (defun simdref--maybe-upgrade (dir)
   "Upgrade the private simdref copy in DIR once a day.
@@ -324,8 +341,7 @@ The steps are pinned uv, simdref, rass and the catalog."
            (bin (expand-file-name "bin" dir))
            (isa (expand-file-name (simdref--exe "isa") bin))
            (env (simdref--uv-env dir))
-           (archive (expand-file-name (if zip "uv.zip" "uv.tar.gz") dir))
-           (checksum (concat archive ".sha256")))
+           (archive (expand-file-name (if zip "uv.zip" "uv.tar.gz") dir)))
       (cl-labels
           ((fail (cause)
              (setq simdref--installing nil)
@@ -345,7 +361,9 @@ The steps are pinned uv, simdref, rass and the catalog."
            (download (url dest on-done)
              (step "curl" (list "-fsSL" "-o" dest url) on-done))
            (check-sha ()
-             (if (simdref--sha256-match-p archive checksum)
+             ;; The check reads the pinned digest, never a fetched sidecar.
+             (if (simdref--sha256-match-p
+                  archive (cdr (assoc target simdref--uv-sha256)))
                  (extract)
                (fail "uv checksum mismatch")))
            (extract ()
@@ -367,9 +385,7 @@ The steps are pinned uv, simdref, rass and the catalog."
              (simdref--echo "install done, run M-x eglot")))
         (if (not base)
             (fail (format "no uv build for %s" system-configuration))
-          (download base archive
-                    (lambda ()
-                      (download (concat base ".sha256") checksum #'check-sha))))))))
+          (download base archive #'check-sha))))))
 
 (defun simdref-maintain ()
   "Install simdref when it is missing, else run the daily upgrade check."
@@ -434,12 +450,19 @@ command.  With no server, start the asynchronous install and signal
                            simdref-companion-server
                            (list "--" cmd)))
                (list cmd)))
-        (user-error "Installing simdref in the background.  Run M-x eglot again when the log says the install is done"))))
+        (user-error "%s Installing simdref in the background.  Run M-x eglot again when the log says the install is done"
+                    simdref--not-found-text))))
 
 ;;;###autoload
 (with-eval-after-load 'eglot
+  ;; Two keys, not one shared key: eglot lets a running server manage
+  ;; every mode its starting key lists (eglot--languageId), so one key
+  ;; let an asm-started bare simdref server claim later C buffers and
+  ;; skip the rass plus clangd contact.
   (add-to-list 'eglot-server-programs
-               (cons simdref--modes #'simdref--eglot-contact)))
+               (cons simdref--c-modes #'simdref--eglot-contact))
+  (add-to-list 'eglot-server-programs
+               (cons simdref--asm-modes #'simdref--eglot-contact)))
 
 ;;;###autoload
 (with-eval-after-load 'lsp-mode

@@ -8,7 +8,7 @@ container, restores the file and proves the restore with `cmp`.
 | id | mutation | edit | named test |
 |----|----------|------|------------|
 | M1 | remove time gate | `(when (simdref--claim-marker marker)` becomes `(when t` | `simdref-test-throttle-skips-same-day` |
-| M2 | remove sha check | `(if (simdref--sha256-match-p archive checksum)` becomes `(if t` | `simdref-test-install-rejects-bad-sha` |
+| M2 | remove sha check | `(string-equal (downcase expected) got)` becomes `t` | `simdref-test-install-rejects-bad-sha` |
 | M3 | drop PATH-install guard | `(when (simdref--managed-p server dir)` becomes `(when t` | `simdref-test-path-install-untouched` |
 | M4 | delete today's marker in cleanup | `(unless (equal f marker)` becomes `(unless nil` | `simdref-test-todays-marker-kept` |
 | M5 | drop executable-exists check | `(if (not (file-executable-p program))` becomes `(if nil` | `simdref-test-missing-executable-quiet` |
@@ -16,7 +16,7 @@ container, restores the file and proves the restore with `cmp`.
 | M7 | log nonzero exit at the success level | `(simdref--echo "%s" line)` becomes `(simdref--log "%s" line)` in `simdref--exit-log` | `simdref-test-nonzero-louder-than-success` |
 | M8 | stamp written before isa update | `(refresh ()` becomes `(refresh () (simdref--stamp dir)` | `simdref-test-failed-isa-update-no-stamp` |
 | M9 | predicate ignoring the stamp | `(file-exists-p (expand-file-name "installed" dir))` becomes `t` | `simdref-test-killed-uv-install-not-installed` |
-| M10 | display-warning reintroduced | `(message "simdref: simdref-lsp not found; %s" cause)` becomes the same call behind `(progn (display-warning 'simdref cause :warning) ...)` | `simdref-test-failed-install-quiet` |
+| M10 | display-warning reintroduced | `(message "simdref: %s Failed step: %s" simdref--not-found-text cause)` becomes the same call behind `(progn (display-warning 'simdref cause :warning) ...)` | `simdref-test-failed-install-quiet` |
 | M11 | contact waiting loop reintroduced | the `user-error` in `simdref--eglot-contact` becomes a `while simdref--installing` wait loop that returns the contact | `simdref-test-eglot-contact-never-waits` |
 | M12 | stamp before rass install | `(install-rass ()` becomes `(install-rass () (simdref--stamp dir)` | `simdref-test-install-rass-step-stamp-last` |
 | M13 | contact ignoring the companion check | `(if (and rass (executable-find (car simdref-companion-server)))` becomes `(if rass` | `simdref-test-contact-cxx-no-clangd` |
@@ -24,6 +24,8 @@ container, restores the file and proves the restore with `cmp`.
 | M15 | simdref no longer first in the rass command | the tail of the preset append in `simdref--eglot-contact` becomes `(list "--") simdref-companion-server (list "--" cmd)` | `simdref-test-contact-cxx-rass-with-clangd` |
 | M16 | hover routing back to primary only | the hover fan-out in `simdref-rass.py` becomes `s for s in servers[:1]` | `test_hover_routes_to_all_hover_servers` |
 | M17 | maintenance skips the missing-rass install | the rass install run form in `simdref--maybe-upgrade` becomes `(funcall refresh nil nil)` | `simdref-test-daily-install-rass-missing` |
+| M18 | one shared eglot key | the two `eglot-server-programs` `add-to-list` forms in the eglot registration become the single `(cons simdref--modes #'simdref--eglot-contact)` entry, the base form | `simdref-test-eglot-asm-server-not-for-cxx` |
+| M19 | wrong pin in the uv check | `(cdr (assoc target simdref--uv-sha256))` in `check-sha` becomes `(make-string 64 ?0)` | `simdref-test-first-install` |
 
 The throttle mutation target is the time gate (M1). The named test
 fails when a same-day restart re-runs the network step.
@@ -171,3 +173,40 @@ catches it.
 | M17 | `simdref-test-daily-install-rass-missing` FAILED | failed-loud |
 
 All seventeen mutations are caught. Every restore is clean.
+
+## Results at the consistency fix commit
+
+Each run: the named test in the container must fail. The restore
+copies the edited file back from the pristine copy and `cmp` proves it
+byte-identical (`cmp exit=0`). All nineteen mutations run again at
+this commit, old ones included. M2 and M10 retarget the new code text.
+M18 is new: it reverts the eglot registration to the one shared key,
+the base form, and the new eglot test catches it. M19 is new: it feeds
+a wrong digest to the uv check, and the install test catches it.
+M1-M5 ran the full suite per mutation. M6-M19 ran the named test only:
+parallel podman load pushed a full-suite run per mutation past the
+wall-clock cap of the tool.
+
+| id | named test result | verdict |
+|----|-------------------|---------|
+| M1 | `simdref-test-throttle-skips-same-day` FAILED | failed-loud |
+| M2 | `simdref-test-install-rejects-bad-sha` FAILED | failed-loud |
+| M3 | `simdref-test-path-install-untouched` FAILED | failed-loud |
+| M4 | `simdref-test-todays-marker-kept` FAILED | failed-loud |
+| M5 | `simdref-test-missing-executable-quiet` FAILED | failed-loud |
+| M6 | `simdref-test-refresh-after-failed-upgrade` FAILED | failed-loud |
+| M7 | `simdref-test-nonzero-louder-than-success` FAILED | failed-loud |
+| M8 | `simdref-test-failed-isa-update-no-stamp` FAILED | failed-loud |
+| M9 | `simdref-test-killed-uv-install-not-installed` FAILED | failed-loud |
+| M10 | `simdref-test-failed-install-quiet` FAILED | failed-loud |
+| M11 | `simdref-test-eglot-contact-never-waits` FAILED | failed-loud |
+| M12 | `simdref-test-install-rass-step-stamp-last` FAILED | failed-loud |
+| M13 | `simdref-test-contact-cxx-no-clangd` FAILED | failed-loud |
+| M14 | `simdref-test-contact-asm-no-rass` FAILED | failed-loud |
+| M15 | `simdref-test-contact-cxx-rass-with-clangd` FAILED | failed-loud |
+| M16 | `test_hover_routes_to_all_hover_servers` FAILED | failed-loud |
+| M17 | `simdref-test-daily-install-rass-missing` FAILED | failed-loud |
+| M18 | `simdref-test-eglot-asm-server-not-for-cxx` FAILED | failed-loud |
+| M19 | `simdref-test-first-install` FAILED | failed-loud |
+
+All nineteen mutations are caught. Every restore is clean.

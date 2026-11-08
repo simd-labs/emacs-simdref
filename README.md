@@ -3,10 +3,12 @@
 Show the brief of an assembly instruction from the local simdref catalog.
 
 `M-x eglot` on a buffer shows hover docs and inlay hints for instructions.
-The catalog is local, so the server answers without network.
+The catalog is local, so the server answers without network. An inlay
+hint label is at most 60 characters: the server cuts a longer brief and
+ends it with `...`.
 
-![Emacs showing simdref inlay hints in an asm buffer](https://raw.githubusercontent.com/simd-labs/emacs-simdref/844b53b3ab332cbffa210c6a573f1471e838e13c/emacs-asm.png)
-![Emacs showing a simdref inlay hint in a C++ buffer](https://raw.githubusercontent.com/simd-labs/emacs-simdref/844b53b3ab332cbffa210c6a573f1471e838e13c/emacs-cpp.png)
+![Emacs showing simdref inlay hints in an asm buffer](https://raw.githubusercontent.com/simd-labs/emacs-simdref/81f8e260e2c98b509a5be81653f872049129d0b6/emacs-asm.png)
+![Emacs showing a simdref inlay hint in a C++ buffer](https://raw.githubusercontent.com/simd-labs/emacs-simdref/81f8e260e2c98b509a5be81653f872049129d0b6/emacs-cpp.png)
 
 ## Requirements
 
@@ -25,6 +27,12 @@ The package registers `simdref-lsp` with eglot for `asm-mode`, `nasm-mode`,
 `cuda-mode`, `c-mode`, `c++-mode`, `c-ts-mode` and `c++-ts-mode`. When
 lsp-mode is loaded, it registers the server there too.
 
+## Settings
+
+- `simdref-install-dir`: directory of the private install. Default `(locate-user-emacs-file "simdref/")`.
+- `simdref-uv-base-url`: base URL of the pinned `uv` release. Default the GitHub release of `uv` 0.12.23.
+- `simdref-companion-server`: command list of the companion LSP server for C, C++ and CUDA buffers. Default `("clangd")`. Nil runs simdref alone. The first element must be on `exec-path`.
+
 ## First start
 
 Without a server on `PATH`, the package installs one in the background to
@@ -33,17 +41,16 @@ Without a server on `PATH`, the package installs one in the background to
 `M-x eglot` during the install starts nothing and shows this error:
 
 ```
-Installing simdref in the background.  Run M-x eglot again when the log says the install is done.
+simdref not found. Install it: uv tool install simdref (or pip install simdref), then run isa update. Instructions: https://github.com/simd-labs/simdref Installing simdref in the background.  Run M-x eglot again when the log says the install is done
 ```
 
 When the echo area shows `simdref: install done, run M-x eglot`, run
 `M-x eglot` again.
 
-Once a day the package upgrades that copy and refreshes the catalog. A
-new simdref version takes effect at the next server start. A server on
-`PATH` is never upgraded.
-
-Set `simdref-install-dir` to move the private install.
+Once a day the package upgrades that copy, `rass` and the catalog.
+A new simdref version takes effect at the next server start.
+Restart the server with `M-x eglot-shutdown` and `M-x eglot`. A server
+on `PATH` is never upgraded.
 
 ## C, C++ and CUDA buffers
 
@@ -54,15 +61,11 @@ install. An install from before rass support gets `rass` at the next
 daily check. lsp-mode runs simdref as an add-on client with clangd and
 no multiplexer.
 
-The companion server is the `simdref-companion-server` command list.
-The default is `("clangd")`. Set it to nil to run simdref alone. The
-first element of the list must be on `exec-path`. Assembly buffers run
-simdref alone.
+The companion server is the `simdref-companion-server` command list
+(see Settings). Assembly buffers run simdref alone.
 
 Hover on an asm string shows the simdref instruction text. Hover on a
 C++ name shows the clangd declaration: both servers answer hover.
-
-A new simdref or rass version takes effect at the next server start.
 
 ## Logging
 
@@ -73,7 +76,7 @@ starts with `simdref:` and names the step that failed. The missing-server
 notice prints once per Emacs session. A failed install shows for example:
 
 ```
-simdref: simdref-lsp not found; curl -fsSL ... failed: exit 6
+simdref: simdref not found. Install it: uv tool install simdref (or pip install simdref), then run isa update. Instructions: https://github.com/simd-labs/simdref Failed step: curl -fsSL ... failed: exit 6
 ```
 
 ## Test

@@ -112,6 +112,10 @@ the real `display-warning'."
 (defvar simdref-test--tmp-root nil
   "Install dir of the current sandbox.")
 
+(defconst simdref-test--not-found
+  "simdref not found. Install it: uv tool install simdref (or pip install simdref), then run isa update. Instructions: https://github.com/simd-labs/simdref"
+  "The shared missing-server text the package must report.")
+
 (defmacro simdref-test--with-sandbox (&rest body)
   "Run BODY with a fresh install dir, a fresh argv log and a fresh session.
 The install dir starts out missing: the package must create it."
@@ -159,8 +163,10 @@ This is a complete install: the server, the tools and the stamp."
                                   simdref-test--tmp-root)))
 
 (defun simdref-test--stage-uv (tmp corrupt)
-  "Stage a uv archive and sidecar under TMP.  Return the base file URL.
-When CORRUPT is non-nil the sidecar holds a wrong hash."
+  "Stage a uv archive under TMP and pin its digest.  Return the base file URL.
+The install checks the pinned digest, so the sandbox pins the digest
+of its staged archive.  When CORRUPT is non-nil the pin holds a wrong
+digest."
   (let* ((target (or (simdref--uv-target) (error "no uv target for this machine")))
          (work (expand-file-name "work" tmp))
          (stage (expand-file-name "stage" tmp))
@@ -173,13 +179,14 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
                                  "-czf" (expand-file-name (format "%s.tar.gz" top) stage)
                                  "-C" work top)))
     (let ((archive (expand-file-name (format "%s.tar.gz" top) stage)))
-      (with-temp-file (concat archive ".sha256")
-        (insert (if corrupt
-                    (make-string 64 ?0)
-                  (with-temp-buffer
-                    (insert-file-contents-literally archive)
-                    (secure-hash 'sha256 (current-buffer))))
-                "  " (format "%s.tar.gz" top) "\n"))
+      ;; A fresh entry shadows the real pin: assoc reads the first match.
+      (push (cons target
+                  (if corrupt
+                      (make-string 64 ?0)
+                    (with-temp-buffer
+                      (insert-file-contents-literally archive)
+                      (secure-hash 'sha256 (current-buffer)))))
+            simdref--uv-sha256)
       (concat "file://" stage "/"))))
 
 (ert-deftest simdref-test-fakes-parse-and-run ()
@@ -217,7 +224,7 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
     (should (file-executable-p (expand-file-name "bin/simdref-lsp" simdref-test--tmp-root)))))
 
 (ert-deftest simdref-test-install-rejects-bad-sha ()
-  "A wrong sha256 sidecar must stop the install before any uv run."
+  "A wrong sha256 pin must stop the install before any uv run."
   (simdref-test--with-sandbox
     (let ((simdref-uv-base-url (simdref-test--stage-uv simdref-test--tmp-root t))
           (lines nil))
@@ -231,14 +238,15 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
                            (lambda (l) (string-match-p "checksum mismatch" l))
                            (simdref-test--simdref-messages simdref-test--lines)))
                         120)))))
-      ;; The download ran for real; the sha check rejected it.
+      ;; The download ran for real; the pin rejected it.
       (should (file-exists-p (expand-file-name "uv.tar.gz" simdref-test--tmp-root)))
       (should (not (string-match-p "tool install" (simdref-test--log-contents))))
-      ;; The failure is one echo-area line, and it names the step.
+      ;; The failure is one echo-area line, and it carries the shared text.
       (let ((notice (cl-find-if
-                     (lambda (l) (string-match-p "simdref-lsp not found" l))
+                     (lambda (l) (string-match-p "checksum mismatch" l))
                      (simdref-test--simdref-messages lines))))
         (should notice)
+        (should (string-match-p (regexp-quote simdref-test--not-found) notice))
         (should (string-match-p "checksum mismatch" notice)))
       (should (not (get-buffer "*Warnings*"))))))
 
@@ -361,7 +369,7 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
       (let ((echo (simdref-test--simdref-messages lines)))
         (should (= 1 (length echo)))
         (should (string-prefix-p "simdref: " (car echo)))
-        (should (string-match-p "simdref-lsp not found" (car echo)))
+        (should (string-match-p (regexp-quote simdref-test--not-found) (car echo)))
         (should (string-match-p "curl" (car echo)))))))
 
 (ert-deftest simdref-test-eglot-contact-never-waits ()
@@ -372,6 +380,7 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
            (err (should-error (simdref--eglot-contact) :type 'user-error)))
       (should (< (- (float-time) start) 1.0))
       (should (string-match-p "M-x eglot" (cadr err)))
+      (should (string-match-p (regexp-quote simdref-test--not-found) (cadr err)))
       ;; The contact started the asynchronous install.
       (should simdref--installing)
       (should (not (get-buffer "*Warnings*")))
@@ -429,6 +438,38 @@ When CORRUPT is non-nil the sidecar holds a wrong hash."
                  (and (memq mode (if (listp modes) modes (list modes)))
                       (eq (cdr entry) #'simdref--eglot-contact))))
              eglot-server-programs))))
+
+(ert-deftest simdref-test-eglot-asm-server-not-for-cxx ()
+  "An asm-started eglot server must not manage a C, C++ or CUDA buffer.
+eglot records the modes of the `eglot-server-programs' key that
+started a server and reuses it for those modes in the project
+(eglot--languageId).  One shared key made an asm-started bare simdref
+server claim a later .cpp buffer, so the rass plus clangd contact
+never ran there.  The test computes the managed modes exactly like
+`eglot--guess-contact' does."
+  (require 'eglot)
+  (let ((asm-modes (mapcar #'car (car (eglot--lookup-mode 'asm-mode))))
+        (c-modes (mapcar #'car (car (eglot--lookup-mode 'c++-mode)))))
+    (should (memq 'asm-mode asm-modes))
+    (should (null (cl-intersection asm-modes simdref--c-modes)))
+    (should (memq 'c++-mode c-modes))
+    (should (cl-every (lambda (m) (memq m c-modes)) simdref--c-modes))
+    (should (null (cl-intersection c-modes simdref--asm-modes)))
+    ;; eglot matches modes with `provided-mode-derived-p': check that
+    ;; path too, not only the plain mode names.
+    (dolist (m simdref--c-modes)
+      (should (null (cl-find-if (lambda (mode) (provided-mode-derived-p m mode))
+                                asm-modes))))))
+
+(ert-deftest simdref-test-uv-pins-complete ()
+  "Every uv release triple carries a 64-hex sha256 pin."
+  (dolist (target (cl-loop for (_os . archs) in simdref--uv-targets
+                           append (mapcar #'cdr archs)))
+    (should (string-match-p "\\`[0-9a-f]\\{64\\}\\'"
+                            (or (cdr (assoc target simdref--uv-sha256)) ""))))
+  ;; Sandbox pins shadow entries by car, so count the unique triples.
+  (should (= 6 (length (cl-remove-duplicates
+                        simdref--uv-sha256 :key #'car :test #'equal)))))
 
 (ert-deftest simdref-test-contact-cxx-rass-with-clangd ()
   "A C++ buffer with clangd runs rass with the simdref-rass.py preset.
