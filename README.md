@@ -25,7 +25,8 @@ ends it with `...`.
 
 The package registers `simdref-lsp` with eglot for `asm-mode`, `nasm-mode`,
 `cuda-mode`, `c-mode`, `c++-mode`, `c-ts-mode` and `c++-ts-mode`. When
-lsp-mode is loaded, it registers the server there too.
+lsp-mode is loaded, it registers the server there too. The package maps a
+`.ptx` file to `asm-mode`, so a PTX buffer gets the simdref server.
 
 ## Settings
 
@@ -64,7 +65,8 @@ no multiplexer.
 The companion server is the `simdref-companion-server` command list
 (see Settings). Assembly buffers run simdref alone.
 
-Hover on an asm string shows the simdref instruction text. Hover on a
+Hover on an asm string shows the simdref instruction text. Hover on an
+inline PTX string in a `.cu` buffer shows the same text. Hover on a
 C++ name shows the clangd declaration: both servers answer hover.
 
 ## Logging

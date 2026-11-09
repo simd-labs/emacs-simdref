@@ -453,6 +453,11 @@ command.  With no server, start the asynchronous install and signal
         (user-error "%s Installing simdref in the background.  Run M-x eglot again when the log says the install is done"
                     simdref--not-found-text))))
 
+;; Emacs has no PTX mode, so serve a .ptx buffer through asm-mode,
+;; which the package already covers.
+;;;###autoload
+(add-to-list 'auto-mode-alist '("\\.ptx\\'" . asm-mode))
+
 ;;;###autoload
 (with-eval-after-load 'eglot
   ;; Two keys, not one shared key: eglot lets a running server manage

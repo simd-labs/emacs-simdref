@@ -426,6 +426,23 @@ digest."
           (should (string-match-p "uv tool install --force simdref" new))
           (should (string-match-p "isa update" new)))))))
 
+(ert-deftest simdref-test-ptx-file-gets-asm-mode ()
+  "A .ptx file opens in asm-mode, so the simdref server serves it.
+Emacs has no built-in PTX mode, so the package registers the
+suffix on asm-mode, which `eglot-server-programs' already maps
+to the simdref contact."
+  (require 'eglot)
+  (should (equal (alist-get "\\.ptx\\'" auto-mode-alist nil nil #'equal)
+                 'asm-mode))
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/simdref-test-probe.ptx")
+    (set-auto-mode)
+    (should (eq major-mode 'asm-mode)))
+  ;; eglot reads asm-mode for the .ptx buffer and picks the
+  ;; simdref contact.
+  (let ((modes (mapcar #'car (car (eglot--lookup-mode 'asm-mode)))))
+    (should (memq 'asm-mode modes))))
+
 (ert-deftest simdref-test-eglot-registration ()
   "eglot-server-programs maps every listed mode to the simdref contact."
   (require 'eglot)
